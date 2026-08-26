@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MP3 to Mpdoge3 Converter</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{width:min(620px,92vw);background:#0b0b0b;border:1px solid #333;border-radius:16px;padding:32px;box-shadow:0 20px 60px #000}
+h1{margin:0 0 8px}p{color:#aaa}.drop{border:2px dashed #444;border-radius:12px;padding:45px 20px;text-align:center;margin:25px 0;cursor:pointer}.drop:hover{background:#111;border-color:#777}
+button{padding:13px 18px;border:0;border-radius:9px;background:#fff;color:#000;font-weight:bold;cursor:pointer}button:disabled{opacity:.4}
+input{display:none}#status{color:#aaa;margin-top:18px;min-height:22px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>MP3 → Mpdoge3</h1>
+<p>Convert an MP3 into the custom <b>.mpdoge3</b> format.</p>
+<div class="drop" id="drop">Click here or drag an MP3 file here</div>
+<input id="file" type="file" accept=".mp3,audio/mpeg">
+<button id="convert" disabled>Convert</button>
+<div id="status"></div>
+</div>
+<script>
+const MAGIC="MPDOGE30";
+const fileInput=document.getElementById("file");
+const drop=document.getElementById("drop");
+const convert=document.getElementById("convert");
+const status=document.getElementById("status");
+let selected=null;
+
+drop.onclick=()=>fileInput.click();
+fileInput.onchange=()=>choose(fileInput.files[0]);
+
+drop.ondragover=e=>{e.preventDefault();drop.style.borderColor="#aaa"};
+drop.ondragleave=()=>drop.style.borderColor="#444";
+drop.ondrop=e=>{e.preventDefault();drop.style.borderColor="#444";choose(e.dataTransfer.files[0])};
+
+function choose(file){
+ if(!file)return;
+ if(!file.name.toLowerCase().endsWith(".mp3") && file.type!=="audio/mpeg"){
+   status.textContent="Please select an MP3 file."; return;
+ }
+ selected=file;
+ drop.textContent="Selected: "+file.name;
+ convert.disabled=false;
+ status.textContent="Ready.";
+}
+
+convert.onclick=async()=>{
+ if(!selected)return;
+ convert.disabled=true;
+ status.textContent="Converting...";
+ try{
+   const audio=new Uint8Array(await selected.arrayBuffer());
+   const name=new TextEncoder().encode(selected.name);
+   /*
+     Format:
+     8 bytes  magic: M P D O G E 3 0
+     4 bytes  filename length (little-endian)
+     4 bytes  MP3 length (little-endian)
+     N bytes  original filename
+     N bytes  MP3 data
+   */
+   const header=new Uint8Array(16+name.length);
+   const view=new DataView(header.buffer);
+   header.set(new TextEncoder().encode(MAGIC),0);
+   view.setUint32(8,name.length,true);
+   view.setUint32(12,audio.length,true);
+   header.set(name,16);
+
+   const blob=new Blob([header,audio],{type:"application/octet-stream"});
+   const a=document.createElement("a");
+   a.href=URL.createObjectURL(blob);
+   a.download=selected.name.replace(/\.mp3$/i,"")+".mpdoge3";
+   a.click();
+   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+   status.textContent="Done! Your Mpdoge3 file was created.";
+ }catch(e){status.textContent="Error: "+e.message}
+ convert.disabled=false;
+};
+</script>
+</body>
+</html>
