@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mpdoge3 Viewer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{width:min(680px,92vw);background:#0b0b0b;border:1px solid #333;border-radius:16px;padding:32px;box-shadow:0 20px 60px #000}
+h1{margin:0 0 8px}p{color:#aaa}.drop{border:2px dashed #444;border-radius:12px;padding:45px 20px;text-align:center;margin:25px 0;cursor:pointer}.drop:hover{background:#111;border-color:#777}
+input{display:none}audio{width:100%;margin:20px 0}.info{background:#111;border:1px solid #292929;border-radius:10px;padding:15px;color:#bbb;line-height:1.7}
+button{padding:12px 17px;border:0;border-radius:9px;background:#fff;color:#000;font-weight:bold;cursor:pointer;display:none}#status{color:#aaa;margin-top:17px;min-height:22px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Mpdoge3 Viewer</h1>
+<p>Open and play <b>.mpdoge3</b> files.</p>
+<div class="drop" id="drop">Click here or drag a .mpdoge3 file here</div>
+<input id="file" type="file" accept=".mpdoge3,.mp3,audio/mpeg,application/octet-stream">
+<audio id="player" controls></audio>
+<div class="info" id="info">No file loaded.</div>
+<button id="extract">Extract MP3</button>
+<div id="status"></div>
+</div>
+<script>
+const MAGIC_NEW="MPDOGE30";
+const MAGIC_OLD="MPDOGE3\\0";
+const fileInput=document.getElementById("file");
+const drop=document.getElementById("drop");
+const player=document.getElementById("player");
+const info=document.getElementById("info");
+const extract=document.getElementById("extract");
+const status=document.getElementById("status");
+let mp3Blob=null,mp3Name="audio.mp3",url=null;
+
+drop.onclick=()=>fileInput.click();
+fileInput.onchange=()=>load(fileInput.files[0]);
+drop.ondragover=e=>{e.preventDefault();drop.style.borderColor="#aaa"};
+drop.ondragleave=()=>drop.style.borderColor="#444";
+drop.ondrop=e=>{e.preventDefault();drop.style.borderColor="#444";load(e.dataTransfer.files[0])};
+
+async function load(file){
+ if(!file)return;
+ status.textContent="Opening...";
+ try{
+   const buffer=await file.arrayBuffer();
+   const bytes=new Uint8Array(buffer);
+
+   // 1. First support a normal MP3 that was renamed to .mpdoge3.
+   if(isMP3(bytes)){
+      mp3Blob=new Blob([bytes],{type:"audio/mpeg"});
+      mp3Name=file.name.replace(/\.mpdoge3$/i,"")+".mp3";
+      show(file.name,"Renamed MP3",bytes.length);
+      return;
+   }
+
+   // 2. Support the Mpdoge3 format created by the converter.
+   const magic=new TextDecoder().decode(bytes.slice(0,8));
+
+   // Accept files from both versions of the converter.
+   if(magic===MAGIC_NEW || magic==="MPDOGE3\\0"){
+      if(buffer.byteLength<16)throw new Error("The Mpdoge3 file is too small.");
+
+      const view=new DataView(buffer);
+      const nameLength=view.getUint32(8,true);
+      const audioLength=view.getUint32(12,true);
+      const start=16+nameLength;
+      const end=start+audioLength;
+
+      if(nameLength>100000)
+        throw new Error("The filename information is invalid.");
+      if(audioLength>buffer.byteLength)
+        throw new Error("The audio length is invalid.");
+      if(start<16 || end>buffer.byteLength)
+        throw new Error("The Mpdoge3 file is damaged.");
+
+      mp3Name=new TextDecoder().decode(bytes.slice(16,start));
+      const audio=bytes.slice(start,end);
+
+      if(!isMP3(audio)){
+        throw new Error("The Mpdoge3 file was opened, but the stored audio is not MP3 data.");
+      }
+
+      mp3Blob=new Blob([audio],{type:"audio/mpeg"});
+      show(file.name,mp3Name,audio.length);
+      return;
+   }
+
+   // Extra compatibility: some files may have the old header without
+   // the final zero byte. Try it when the length fields are present.
+   if(new TextDecoder().decode(bytes.slice(0,7))==="MPDOGE3" && buffer.byteLength>=15){
+      const view=new DataView(buffer);
+      const nameLength=view.getUint32(7,true);
+      const audioLength=view.getUint32(11,true);
+      const start=15+nameLength;
+      const end=start+audioLength;
+
+      if(nameLength<=100000 && end<=buffer.byteLength){
+        const audio=bytes.slice(start,end);
+        if(isMP3(audio)){
+          mp3Name=new TextDecoder().decode(bytes.slice(15,start));
+          mp3Blob=new Blob([audio],{type:"audio/mpeg"});
+          show(file.name,mp3Name,audio.length);
+          return;
+        }
+      }
+   }
+
+   throw new Error("This is not a valid Mpdoge3 or MP3 file.");
+ }catch(e){
+   player.removeAttribute("src");
+   extract.style.display="none";
+   info.textContent="No file loaded.";
+   status.textContent=e.message;
+ }
+}
+
+function isMP3(bytes){
+ // MPEG frame sync
+ if(bytes.length>=2 && bytes[0]===0xFF && (bytes[1]&0xE0)===0xE0)return true;
+ // ID3 metadata header
+ if(bytes.length>=3 && bytes[0]===0x49 && bytes[1]===0x44 && bytes[2]===0x33)return true;
+ return false;
+}
+
+function show(containerName,originalName,size){
+ if(url)URL.revokeObjectURL(url);
+ url=URL.createObjectURL(mp3Blob);
+ player.src=url;
+ player.load();
+ info.innerHTML="<b>Mpdoge3:</b> "+esc(containerName)+
+   "<br><b>MP3:</b> "+esc(originalName)+
+   "<br><b>Audio size:</b> "+format(size);
+ extract.style.display="inline-block";
+ status.textContent="Loaded successfully.";
+}
+
+extract.onclick=()=>{
+ if(!mp3Blob)return;
+ const a=document.createElement("a");
+ a.href=url;
+ a.download=mp3Name.toLowerCase().endsWith(".mp3")?mp3Name:mp3Name+".mp3";
+ a.click();
+};
+
+function format(n){
+ if(n<1024)return n+" B";
+ if(n<1048576)return (n/1024).toFixed(1)+" KB";
+ return (n/1048576).toFixed(1)+" MB";
+}
+function esc(s){
+ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+</script>
+</body>
+</html>
